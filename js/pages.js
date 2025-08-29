@@ -21,6 +21,10 @@ export function initPages(app) {
     // YANG Browser Page
     const yangPage = createYangPage();
     mainContent.appendChild(yangPage);
+    const cbsPage = createCbsPage();
+    mainContent.appendChild(cbsPage);
+    const tasStandalone = createTasStandalonePage();
+    mainContent.appendChild(tasStandalone);
     
     // CoAP Console Page
     const coapPage = createCoapPage();
@@ -374,6 +378,36 @@ function initPageHandlers(app) {
                     '</tbody></table>';
             }
         }
+        ,
+        tsn: {
+            load: async () => {
+                if (!app.controller) return;
+                const count = app.controller.getPortCount();
+                const tasSel = document.getElementById('tas-port');
+                const preSel = document.getElementById('preempt-port');
+                if (tasSel) tasSel.innerHTML = Array.from({length: count}, (_,i)=>`<option value="${i}">Port ${i}</option>`).join('');
+                if (preSel) preSel.innerHTML = Array.from({length: count}, (_,i)=>`<option value="${i}">Port ${i}</option>`).join('');
+                if (typeof addTasEntry === 'function') addTasEntry();
+            }
+        },
+        cbs: {
+            load: async () => {
+                if (!app.controller) return;
+                const count = app.controller.getPortCount();
+                const cbsSel = document.getElementById('cbs-port');
+                if (cbsSel) cbsSel.innerHTML = Array.from({length: count}, (_,i)=>`<option value="${i}">Port ${i}</option>`).join('');
+            }
+        },
+        tas: {
+            load: async () => {
+                if (!app.controller) return;
+                const count = app.controller.getPortCount();
+                const tasSel = document.getElementById('tas-port');
+                if (tasSel) tasSel.innerHTML = Array.from({length: count}, (_,i)=>`<option value="${i}">Port ${i}</option>`).join('');
+                if (typeof addTasEntry === 'function') addTasEntry();
+            }
+        }
+
     };
 }
 

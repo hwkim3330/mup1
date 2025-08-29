@@ -134,6 +134,19 @@ export class LAN966xController {
         return await this.coap.put(oid, data);
     }
 
+
+    /**
+     * Configure Credit-Based Shaper (CBS)
+     */
+    async configureCBS(portIndex, trafficClass, { idleSlope, sendSlope } = {}) {
+        const base = `/ieee802-dot1q-sched:interfaces/interface[name='eth${portIndex}']/scheduler/traffic-class[index='${trafficClass}']/credit-based-shaper`;
+        const payload = {
+            'idle-slope': idleSlope,
+            'send-slope': sendSlope != null ? sendSlope : -idleSlope,
+            'admin-idleslope-enabled': true
+        };
+        return await this.coap.put(base, payload);
+    }
     /**
      * Create VLAN
      */
@@ -197,6 +210,19 @@ export class LAN966xController {
         return await this.coap.put(oid, data);
     }
 
+
+    /**
+     * Configure Credit-Based Shaper (CBS)
+     */
+    async configureCBS(portIndex, trafficClass, { idleSlope, sendSlope } = {}) {
+        const base = `/ieee802-dot1q-sched:interfaces/interface[name='eth${portIndex}']/scheduler/traffic-class[index='${trafficClass}']/credit-based-shaper`;
+        const payload = {
+            'idle-slope': idleSlope,
+            'send-slope': sendSlope != null ? sendSlope : -idleSlope,
+            'admin-idleslope-enabled': true
+        };
+        return await this.coap.put(base, payload);
+    }
     /**
      * Configure Time-Aware Scheduler (TAS)
      */
@@ -217,6 +243,19 @@ export class LAN966xController {
         return await this.coap.put(oid, data);
     }
 
+
+    /**
+     * Configure Credit-Based Shaper (CBS)
+     */
+    async configureCBS(portIndex, trafficClass, { idleSlope, sendSlope } = {}) {
+        const base = `/ieee802-dot1q-sched:interfaces/interface[name='eth${portIndex}']/scheduler/traffic-class[index='${trafficClass}']/credit-based-shaper`;
+        const payload = {
+            'idle-slope': idleSlope,
+            'send-slope': sendSlope != null ? sendSlope : -idleSlope,
+            'admin-idleslope-enabled': true
+        };
+        return await this.coap.put(base, payload);
+    }
     /**
      * Configure Frame Preemption
      */
@@ -235,6 +274,19 @@ export class LAN966xController {
         return await this.coap.put(oid, data);
     }
 
+
+    /**
+     * Configure Credit-Based Shaper (CBS)
+     */
+    async configureCBS(portIndex, trafficClass, { idleSlope, sendSlope } = {}) {
+        const base = `/ieee802-dot1q-sched:interfaces/interface[name='eth${portIndex}']/scheduler/traffic-class[index='${trafficClass}']/credit-based-shaper`;
+        const payload = {
+            'idle-slope': idleSlope,
+            'send-slope': sendSlope != null ? sendSlope : -idleSlope,
+            'admin-idleslope-enabled': true
+        };
+        return await this.coap.put(base, payload);
+    }
     /**
      * Get system statistics
      */

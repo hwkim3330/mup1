@@ -542,3 +542,19 @@ window.__pushHistory = (entry) => {
     el.innerHTML = `<pre>${rows||'No history'}</pre>`;
   }catch{}
 };
+
+
+// CBS configurator (doc-based)
+window.configureCBS = async () => {
+  try {
+    if (!app.controller) throw new Error('Not connected');
+    const port = parseInt(document.getElementById('cbs-port').value||'0',10);
+    const tc = parseInt(document.getElementById('cbs-tc').value||'0',10);
+    const linkMbps = parseInt(document.getElementById('cbs-link').value||'1000',10);
+    const bwPct = parseFloat(document.getElementById('cbs-bw').value||'20');
+    const linkBps = linkMbps * 1_000_000;
+    const idleSlope = Math.floor(linkBps * (bwPct/100.0));
+    await app.controller.configureCBS(port, tc, { idleSlope });
+    showSuccess(`CBS applied: port ${port}, tc ${tc}, idle-slope ${idleSlope}`);
+  } catch(e) { showError(e.message); }
+};
