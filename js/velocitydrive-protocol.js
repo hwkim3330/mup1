@@ -1,208 +1,178 @@
 /**
  * MUP1 (Microchip UART Protocol #1) Implementation
- * Based on VelocityDRIVE-SP platform
+ * Microchip Unified Protocol v1 for VelocityDRIVE communication
+ * 
+ * Based on reverse engineering of mvdct CLI logs:
+ * - MUP1 wraps CoAP messages over serial
+ * - Uses checksums and packet framing
+ * - Handles ping/pong for device detection
  */
 
 export class MUP1Protocol {
     constructor() {
-        this.SOF = 0x3E; // '>'
-        this.EOF = 0x3C; // '<'
-        this.ESCAPE = 0x5C; // '\\'
-        
-        // Command types
-        this.COMMANDS = {
-            ANNOUNCEMENT: 0x41, // 'A'
-            COAP: 0x43,        // 'C'
-            PING: 0x50,        // 'P'
-            TRACE: 0x54,       // 'T'
-            SYSTEM: 0x53       // 'S'
-        };
-        
-        // Escape sequences
-        this.ESCAPE_MAP = {
-            0x00: 0x30, // '\\0'
-            0xFF: 0x46, // '\\F'
-            0x3E: 0x3E, // '\\>'
-            0x3C: 0x3C, // '\\<'
-            0x5C: 0x5C  // '\\\\'
-        };
+        this.messageId = 1;
+        this.frameBuffer = new Uint8Array(0);
+        this.callbacks = new Map();
     }
 
-    /**
-     * Encode a MUP1 frame
-     * @param {number} type - Command type byte
-     * @param {Uint8Array} data - Payload data
-     * @returns {Uint8Array} - Encoded frame
-     */
-    encodeFrame(type, data = new Uint8Array()) {
-        const frame = [];
-        
-        // Start of frame
-        frame.push(this.SOF);
-        
-        // Command type
-        frame.push(type);
-        
-        // Encode data with escape sequences
-        for (const byte of data) {
-            if (this.needsEscape(byte)) {
-                frame.push(this.ESCAPE);
-                frame.push(this.ESCAPE_MAP[byte]);
-            } else {
-                frame.push(byte);
-            }
-        }
-        
-        // End of frame (single or double based on message size)
-        frame.push(this.EOF);
-        if (frame.length % 2 === 0) {
-            frame.push(this.EOF); // Add padding for even-sized messages
-        }
-        
-        // Calculate and add checksum
-        const checksum = this.calculateChecksum(frame);
-        const checksumStr = checksum.toString(16).toUpperCase().padStart(4, '0');
-        for (const char of checksumStr) {
-            frame.push(char.charCodeAt(0));
-        }
-        
-        return new Uint8Array(frame);
-    }
-
-    /**
-     * Decode a MUP1 frame
-     * @param {Uint8Array} buffer - Raw frame data
-     * @returns {Object} - Decoded frame with type and data
-     */
-    decodeFrame(buffer) {
-        if (buffer.length < 8) {
-            throw new Error('Frame too short');
-        }
-        
-        if (buffer[0] !== this.SOF) {
-            throw new Error('Invalid start of frame');
-        }
-        
-        const type = buffer[1];
-        const data = [];
-        let i = 2;
-        let escaping = false;
-        
-        // Decode data until EOF
-        while (i < buffer.length - 4) {
-            const byte = buffer[i];
-            
-            if (byte === this.EOF) {
-                break;
-            }
-            
-            if (escaping) {
-                data.push(this.unescapeByte(byte));
-                escaping = false;
-            } else if (byte === this.ESCAPE) {
-                escaping = true;
-            } else {
-                data.push(byte);
-            }
-            
-            i++;
-        }
-        
-        // Verify checksum
-        const frameEnd = buffer.indexOf(this.EOF, 2);
-        const checksumStart = buffer[frameEnd + 1] === this.EOF ? frameEnd + 2 : frameEnd + 1;
-        const providedChecksum = String.fromCharCode(
-            buffer[checksumStart],
-            buffer[checksumStart + 1],
-            buffer[checksumStart + 2],
-            buffer[checksumStart + 3]
-        );
-        
-        const frameForChecksum = buffer.slice(0, frameEnd + 1);
-        const calculatedChecksum = this.calculateChecksum(frameForChecksum).toString(16).toUpperCase().padStart(4, '0');
-        
-        if (providedChecksum !== calculatedChecksum) {
-            console.warn('Checksum mismatch:', providedChecksum, 'vs', calculatedChecksum);
-        }
-        
-        return {
-            type: String.fromCharCode(type),
-            data: new Uint8Array(data),
-            checksum: providedChecksum
-        };
-    }
-
-    /**
-     * Check if byte needs escaping
-     */
-    needsEscape(byte) {
-        return byte === 0x00 || byte === 0xFF || 
-               byte === 0x3E || byte === 0x3C || byte === 0x5C;
-    }
-
-    /**
-     * Unescape a byte
-     */
-    unescapeByte(escapedByte) {
-        const reverseMap = {
-            0x30: 0x00, // '0' -> 0x00
-            0x46: 0xFF, // 'F' -> 0xFF
-            0x3E: 0x3E, // '>' -> 0x3E
-            0x3C: 0x3C, // '<' -> 0x3C
-            0x5C: 0x5C  // '\\' -> 0x5C
-        };
-        return reverseMap[escapedByte] || escapedByte;
-    }
-
-    /**
-     * Calculate 16-bit one's complement checksum
-     */
+    // Calculate checksum (appears to be simple sum)
     calculateChecksum(data) {
         let sum = 0;
+        for (let i = 0; i < data.length; i++) {
+            sum = (sum + data[i]) & 0xFFFF;
+        }
+        return sum;
+    }
+
+    // Pack data into MUP1 frame
+    packFrame(payload, messageType = 'c') {
+        // MUP1 frame structure (from logs):
+        // [Header][Length][MsgID][Checksum][Payload][Footer]
         
-        // Sum all bytes as 16-bit values
-        for (let i = 0; i < data.length; i += 2) {
-            const value = i + 1 < data.length ? 
-                (data[i] << 8) | data[i + 1] : 
-                data[i] << 8;
-            sum += value;
+        const header = new Uint8Array([0x40, 0x05]); // Based on log: "40 05"
+        const msgId = new Uint8Array([(this.messageId >> 8) & 0xFF, this.messageId & 0xFF]);
+        
+        // Calculate total frame size: header(2) + msgId(2) + markers(2) + checksum(2) + separators(7) + payload
+        const frameSize = 2 + 2 + 2 + 2 + 7 + payload.length;
+        const frameData = new Uint8Array(frameSize);
+        let offset = 0;
+        
+        // Header
+        frameData.set(header, offset);
+        offset += header.length;
+        
+        // Message ID
+        frameData.set(msgId, offset);
+        offset += 2;
+        
+        // Frame type and length markers (from logs)
+        frameData.set([0xB1, 0x63], offset);
+        offset += 2;
+        
+        // Checksum placeholder
+        const checksumPos = offset;
+        frameData.set([0x11, 0x8D], offset); // Will be calculated
+        offset += 2;
+        
+        // Separator
+        frameData.set([0x33, 0x64, 0x3D, 0x61], offset);
+        offset += 4;
+        
+        // Another separator
+        frameData.set([0x21, 0x8E, 0xFF], offset);
+        offset += 3;
+        
+        // Payload
+        frameData.set(payload, offset);
+        offset += payload.length;
+        
+        // Calculate actual checksum
+        const checksum = this.calculateChecksum(payload);
+        frameData[checksumPos] = (checksum >> 8) & 0xFF;
+        frameData[checksumPos + 1] = checksum & 0xFF;
+        
+        this.messageId++;
+        return frameData;
+    }
+
+    // Unpack MUP1 frame
+    unpackFrame(data) {
+        // Look for CoAP payload after MUP1 headers
+        // From logs, CoAP starts after the FF marker
+        
+        for (let i = 0; i < data.length - 1; i++) {
+            if (data[i] === 0xFF) {
+                // Found payload start
+                return data.slice(i + 1);
+            }
+        }
+        return null;
+    }
+
+    // Create ping message (from log: ">p<<8553")
+    createPingMessage() {
+        const pingText = "p";
+        const suffix = "<<8553"; // Appears to be checksum/identifier
+        return new TextEncoder().encode(pingText + suffix);
+    }
+
+    // Parse ping response (from log: ">PVelocitySP-v2025.06...")
+    parsePingResponse(data) {
+        const text = new TextDecoder().decode(data);
+        if (text.startsWith('VelocitySP-v')) {
+            // Extract version and device info
+            const parts = text.split(' ');
+            return {
+                version: parts[0], // VelocitySP-v2025.06-LAN9662-ung8291
+                param1: parts[1], // 326
+                param2: parts[2], // 300  
+                param3: parts[3]  // 2
+            };
+        }
+        return null;
+    }
+
+    // Create CoAP message wrapped in MUP1
+    createCoAPMessage(method, uri, payload = null) {
+        const coap = new CoAPMessage(method, uri, payload);
+        const coapBytes = coap.encode();
+        return this.packFrame(coapBytes);
+    }
+
+    // Process received data
+    processData(data) {
+        // Add to buffer
+        const newBuffer = new Uint8Array(this.frameBuffer.length + data.length);
+        newBuffer.set(this.frameBuffer);
+        newBuffer.set(data, this.frameBuffer.length);
+        this.frameBuffer = newBuffer;
+
+        // Try to extract complete frames
+        return this.extractFrames();
+    }
+
+    extractFrames() {
+        const frames = [];
+        
+        // Look for frame boundaries and extract CoAP payloads
+        for (let i = 0; i < this.frameBuffer.length - 1; i++) {
+            if (this.frameBuffer[i] === 0x60 && this.frameBuffer[i + 1] === 0x45) {
+                // Found response frame start
+                const payload = this.unpackFrame(this.frameBuffer.slice(i));
+                if (payload) {
+                    frames.push(payload);
+                    // Remove processed data
+                    this.frameBuffer = this.frameBuffer.slice(i + 32); // Approximate frame length
+                    break;
+                }
+            }
         }
         
-        // Add carry bits twice
-        while (sum >> 16) {
-            sum = (sum & 0xFFFF) + (sum >> 16);
-        }
-        
-        // One's complement
-        return (~sum) & 0xFFFF;
+        return frames;
     }
 
     /**
-     * Create a ping frame
+     * Legacy methods for backward compatibility
      */
+    
+    // Create a ping frame
     createPing() {
-        return this.encodeFrame(this.COMMANDS.PING);
+        return this.createPingMessage();
     }
 
-    /**
-     * Create a system request frame
-     */
+    // Create a system request frame
     createSystemRequest(command) {
         const encoder = new TextEncoder();
         const data = encoder.encode(command);
-        return this.encodeFrame(this.COMMANDS.SYSTEM, data);
+        return this.packFrame(data, 'S');
     }
 
-    /**
-     * Create a CoAP frame
-     */
+    // Create a CoAP frame
     createCoapFrame(coapMessage) {
-        return this.encodeFrame(this.COMMANDS.COAP, coapMessage);
+        return this.packFrame(coapMessage, 'C');
     }
 
-    /**
-     * Parse announcement data
-     */
+    // Parse announcement data
     parseAnnouncement(data) {
         const decoder = new TextDecoder();
         const text = decoder.decode(data).trim();
@@ -224,6 +194,224 @@ export class MUP1Protocol {
             info.deviceType = text;
         }
         return info;
+    }
+}
+
+/**
+ * CoAP Message Implementation
+ * Constrained Application Protocol for YANG/CBOR communication
+ */
+export class CoAPMessage {
+    constructor(method = 'GET', uri = '', payload = null) {
+        this.version = 1;
+        this.type = 0; // CON
+        this.code = this.getMethodCode(method);
+        this.messageId = Math.floor(Math.random() * 65536);
+        this.token = new Uint8Array([Math.floor(Math.random() * 256)]);
+        this.options = [];
+        this.payload = payload;
+        
+        // Add URI path option
+        if (uri) {
+            this.addUriPath(uri);
+        }
+        
+        // Add content format for YANG+CBOR
+        if (method === 'FETCH') {
+            this.addOption(12, new TextEncoder().encode('application/yang-identifiers+cbor-seq'));
+        }
+    }
+
+    getMethodCode(method) {
+        const codes = {
+            'GET': 1,
+            'POST': 2,
+            'PUT': 3,
+            'DELETE': 4,
+            'FETCH': 5 // RFC 8132
+        };
+        return codes[method] || 1;
+    }
+
+    addOption(number, value) {
+        this.options.push({ number, value });
+    }
+
+    addUriPath(uri) {
+        // Split URI into path segments
+        const segments = uri.split('/').filter(s => s.length > 0);
+        segments.forEach(segment => {
+            this.addOption(11, new TextEncoder().encode(segment)); // Uri-Path = 11
+        });
+    }
+
+    encode() {
+        // CoAP header: Ver(2) + T(2) + TKL(4) + Code(8) + Message ID(16)
+        const header = new Uint8Array(4);
+        header[0] = (this.version << 6) | (this.type << 4) | this.token.length;
+        header[1] = this.code;
+        header[2] = (this.messageId >> 8) & 0xFF;
+        header[3] = this.messageId & 0xFF;
+
+        // Calculate total size
+        let totalSize = header.length + this.token.length;
+        let optionsSize = 0;
+        
+        // Calculate options size
+        this.options.forEach(opt => {
+            optionsSize += 1 + opt.value.length; // Simplified
+        });
+        
+        totalSize += optionsSize;
+        if (this.payload) {
+            totalSize += 1 + this.payload.length; // 0xFF marker + payload
+        }
+
+        // Build message
+        const message = new Uint8Array(totalSize);
+        let offset = 0;
+
+        // Header
+        message.set(header, offset);
+        offset += header.length;
+
+        // Token
+        message.set(this.token, offset);
+        offset += this.token.length;
+
+        // Options (simplified encoding)
+        this.options.forEach(opt => {
+            message[offset] = opt.number; // Simplified option encoding
+            offset++;
+            message.set(opt.value, offset);
+            offset += opt.value.length;
+        });
+
+        // Payload
+        if (this.payload) {
+            message[offset] = 0xFF; // Payload marker
+            offset++;
+            message.set(this.payload, offset);
+        }
+
+        return message;
+    }
+
+    static decode(data) {
+        // Basic CoAP decoding
+        if (data.length < 4) return null;
+
+        const version = (data[0] >> 6) & 0x3;
+        const type = (data[0] >> 4) & 0x3;
+        const tokenLength = data[0] & 0xF;
+        const code = data[1];
+        const messageId = (data[2] << 8) | data[3];
+
+        let offset = 4;
+        const token = data.slice(offset, offset + tokenLength);
+        offset += tokenLength;
+
+        // Find payload (after 0xFF marker)
+        let payload = null;
+        for (let i = offset; i < data.length; i++) {
+            if (data[i] === 0xFF && i < data.length - 1) {
+                payload = data.slice(i + 1);
+                break;
+            }
+        }
+
+        return {
+            version,
+            type,
+            code,
+            messageId,
+            token,
+            payload
+        };
+    }
+}
+
+/**
+ * CBOR (Concise Binary Object Representation) Implementation
+ * For encoding/decoding YANG data
+ */
+export class CBORCodec {
+    static encode(data) {
+        // Simplified CBOR encoding
+        if (typeof data === 'string') {
+            const bytes = new TextEncoder().encode(data);
+            const result = new Uint8Array(1 + bytes.length);
+            result[0] = 0x60 | Math.min(bytes.length, 23); // Text string
+            result.set(bytes, 1);
+            return result;
+        } else if (typeof data === 'number') {
+            // Positive integer
+            if (data < 24) {
+                return new Uint8Array([data]);
+            } else {
+                const result = new Uint8Array(2);
+                result[0] = 0x18;
+                result[1] = data;
+                return result;
+            }
+        } else if (Array.isArray(data)) {
+            // Array encoding
+            const parts = [new Uint8Array([0x80 | Math.min(data.length, 23)])];
+            data.forEach(item => {
+                parts.push(this.encode(item));
+            });
+            return this.concatArrays(parts);
+        } else if (typeof data === 'object' && data !== null) {
+            // Object/map encoding
+            const keys = Object.keys(data);
+            const parts = [new Uint8Array([0xA0 | Math.min(keys.length, 23)])];
+            keys.forEach(key => {
+                parts.push(this.encode(key));
+                parts.push(this.encode(data[key]));
+            });
+            return this.concatArrays(parts);
+        }
+        return new Uint8Array([0xF7]); // null/undefined
+    }
+
+    static decode(data) {
+        // Simplified CBOR decoding
+        if (data.length === 0) return null;
+
+        const majorType = (data[0] >> 5) & 0x7;
+        const additionalInfo = data[0] & 0x1F;
+
+        switch (majorType) {
+            case 0: // Positive integer
+                return additionalInfo;
+            case 3: // Text string
+                if (additionalInfo < 24) {
+                    return new TextDecoder().decode(data.slice(1, 1 + additionalInfo));
+                }
+                break;
+            case 4: // Array
+                const arrayLength = additionalInfo;
+                const result = [];
+                let offset = 1;
+                for (let i = 0; i < arrayLength && offset < data.length; i++) {
+                    const item = this.decode(data.slice(offset));
+                    result.push(item);
+                    offset += 2; // Simplified
+                }
+                return result;
+        }
+        return null;
+    }
+
+    static concatArrays(arrays) {
+        const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0);
+        const result = new Uint8Array(totalLength);
+        let offset = 0;
+        arrays.forEach(arr => {
+            result.set(arr, offset);
+            offset += arr.length;
+        });
+        return result;
     }
 }
 

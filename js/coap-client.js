@@ -3,7 +3,7 @@
  * RFC 7252 (CoAP) and RFC 9254 (YANG to CBOR)
  */
 
-import { encode as cborEncode, decode as cborDecode } from './cbor.js';
+import { CBORCodec } from './velocitydrive-protocol.js';
 
 export class CoAPClient {
     constructor(controller) {
@@ -95,7 +95,7 @@ export class CoAPClient {
         // Payload marker and payload
         if (payload) {
             header.push(0xFF); // Payload marker
-            const encoded = cborEncode(payload);
+            const encoded = CBORCodec.encode(payload);
             header.push(...encoded);
         }
         
@@ -225,7 +225,7 @@ export class CoAPClient {
         if (payloadStart < data.length) {
             const payloadData = data.slice(payloadStart);
             try {
-                payload = cborDecode(payloadData);
+                payload = CBORCodec.decode(payloadData);
             } catch (e) {
                 // If not CBOR, treat as raw data
                 payload = payloadData;
